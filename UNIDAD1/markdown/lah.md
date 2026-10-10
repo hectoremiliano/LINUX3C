@@ -9,4 +9,4 @@
 
 ## Captura de pantalla
 
-![captura de pantalla lah](../capturas/01.png)
+![captura de pantalla lah](../capturas/01%20%2817-08-26%29.png)
