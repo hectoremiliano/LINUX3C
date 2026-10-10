@@ -6,3 +6,7 @@
 | logs    | drwxrwxr-x | 775    |
 | README  | -rw-rw-r-- | 664    |
 | src     | drwxrwxr-x | 775    |
+
+## Captura de pantalla
+
+![captura de pantalla lah](../capturas/01.png)
