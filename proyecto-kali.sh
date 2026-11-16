@@ -3,8 +3,6 @@
 # PROYECTO FINAL - ADMINISTRACION DE SERVIDORES LINUX
 # Autor: Hector Emiliano Custodio Martinez
 # Dominio: proyecto.linux
-# Servicios: BIND9, APACHE2 y SSH
-# Sistema: Ubuntu/Kali Linux
 # ==========================================================
 set -Eeuo pipefail
 
@@ -23,7 +21,7 @@ if [[ "${1:-}" == "--verificar" ]]; then
     IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
     echo "== VERIFICACION =="
     echo "IP: $IP"
-    echo -n "DNS proyecto.linux -> "; dig @"$IP" "$DOMINIO" A +short || echo "FALLA"
+    echo -n "DNS $DOMINIO -> "; dig @"$IP" "$DOMINIO" A +short || echo "FALLA"
     echo -n "HTTP -> "; curl -s -o /dev/null -w "%{http_code}\n" -H "Host: $DOMINIO" http://127.0.0.1/ || echo "FALLA"
     echo -n "Puerto 22 -> "; (ss -ltn | grep -q ':22 ') && echo "OK" || echo "FALLA"
     echo -n "bind9 -> "; systemctl is-active bind9
@@ -71,11 +69,23 @@ echo "[OK] Respaldos en $RESPALDO"
 # 3. INSTALAR SERVICIOS
 # ----------------------------------------------------------
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y bind9 bind9-utils dnsutils apache2 openssh-server curl
+apt-get update -qq 2>/dev/null || true
+apt-get install -y -qq bind9 bind9-utils dnsutils apache2 openssh-server curl python3 >/dev/null 2>&1 || true
 
 # ----------------------------------------------------------
-# 4. DNS
+# 4. CREAR USUARIO KALI (SI NO EXISTE)
+# ----------------------------------------------------------
+if ! id "kali" &>/dev/null; then
+    echo "[INFO] Creando usuario kali..."
+    useradd -m -s /bin/bash kali
+    echo "kali:kali" | chpasswd
+    echo "[OK] Usuario kali creado (contraseña: kali)"
+else
+    echo "[INFO] El usuario kali ya existe."
+fi
+
+# ----------------------------------------------------------
+# 5. DNS (LIMPIEZA Y CONFIGURACIÓN)
 # ----------------------------------------------------------
 mkdir -p "$ZONEDIR"
 
@@ -90,11 +100,9 @@ options {
 };
 EOF
 
-sed -i '/\/\/ INICIO PROYECTO/,/\/\/ FIN PROYECTO/d' /etc/bind/named.conf.local
-
+> /etc/bind/named.conf.local
 cat >> /etc/bind/named.conf.local <<EOF
-
-// INICIO PROYECTO
+// Zonas del proyecto
 zone "$DOMINIO" {
     type master;
     file "$ARCHIVO_ZONA";
@@ -103,7 +111,6 @@ zone "$ZONA_INVERSA" {
     type master;
     file "$ARCHIVO_INVERSO";
 };
-// FIN PROYECTO
 EOF
 
 cat > "$ARCHIVO_ZONA" <<EOF
@@ -135,39 +142,26 @@ $D  IN  PTR $DOMINIO.
 EOF
 
 named-checkconf
-named-checkzone "$DOMINIO" "$ARCHIVO_ZONA"
-named-checkzone "$ZONA_INVERSA" "$ARCHIVO_INVERSO"
+named-checkzone "$DOMINIO" "$ARCHIVO_ZONA" >/dev/null
+named-checkzone "$ZONA_INVERSA" "$ARCHIVO_INVERSO" >/dev/null
 
-systemctl enable bind9
-systemctl restart bind9
+systemctl enable named 2>/dev/null || true
+systemctl restart bind9 2>/dev/null || systemctl restart named 2>/dev/null || true
 echo "[OK] DNS configurado."
 
 # ----------------------------------------------------------
-# 5. APACHE
+# 6. GENERAR PÁGINA CON PYTHON (DISEÑO BONITO Y CAPTURAS)
 # ----------------------------------------------------------
-mkdir -p "$WEBROOT"
+echo "[INFO] Generando página web con diseño y capturas..."
 
-for unidad in UNIDAD1 UNIDAD2 UNIDAD3 UNIDAD4; do
-    if [[ -d "$SCRIPT_DIR/$unidad" ]]; then
-        mkdir -p "$WEBROOT/evidencias"
-        cp -a "$SCRIPT_DIR/$unidad" "$WEBROOT/evidencias/"
-    fi
-done
-
-if [[ ! -f "$WEBROOT/index.html" ]]; then
-    if [[ -f "$SCRIPT_DIR/index.html" ]]; then
-        cp "$SCRIPT_DIR/index.html" "$WEBROOT/index.html"
-    else
-        cat > "$WEBROOT/index.html" <<EOF
-<!DOCTYPE html>
-<html lang="es"><head><meta charset="UTF-8"><title>Linux Lab</title></head>
-<body><h1>Portafolio Linux</h1>
-<p>Servidor web funcionando.</p>
-<p>Dominio: $DOMINIO</p><p>IP: $IP</p></body></html>
-EOF
-    fi
+if [[ -f "$SCRIPT_DIR/generar_portafolio.py" ]]; then
+    python3 "$SCRIPT_DIR/generar_portafolio.py"
+else
+    echo "ERROR: No se encontró generar_portafolio.py en $SCRIPT_DIR"
+    exit 1
 fi
 
+# Configuración de Apache
 cat > /etc/apache2/sites-available/$DOMINIO.conf <<EOF
 <VirtualHost *:80>
     ServerName $DOMINIO
@@ -190,24 +184,24 @@ a2dissite 000-default.conf 2>/dev/null || true
 apache2ctl configtest
 systemctl enable apache2
 systemctl restart apache2
-echo "[OK] Apache configurado."
+echo "[OK] Apache configurado y página generada."
 
 # ----------------------------------------------------------
-# 6. SSH
+# 7. SSH
 # ----------------------------------------------------------
 systemctl enable ssh
 systemctl restart ssh
 echo "[OK] SSH configurado."
 
 # ----------------------------------------------------------
-# 7. CARPETA ~/proyecto-linux/sitio (lo que el profe verá por SSH)
+# 8. CARPETA ~/proyecto-linux/sitio PARA EL USUARIO KALI
 # ----------------------------------------------------------
 mkdir -p "$SITIO_HOME"
 cp -a "$WEBROOT/." "$SITIO_HOME/" 2>/dev/null || true
 chown -R kali:kali /home/kali/proyecto-linux 2>/dev/null || true
 
 # ----------------------------------------------------------
-# 8. LEEME-PROFESOR.txt + scripts conectar-ssh
+# 9. LEEME-PROFESOR.txt + scripts conectar-ssh
 # ----------------------------------------------------------
 mkdir -p "$ENTREGA"
 cat > "$ENTREGA/LEEME-PROFESOR.txt" <<EOF
@@ -216,6 +210,7 @@ cat > "$ENTREGA/LEEME-PROFESOR.txt" <<EOF
   Dominio: $DOMINIO
   IP del servidor: $IP
   Usuario SSH: kali
+  Contraseña SSH: kali
 =========================================================
 
 1) En su laptop Windows (PowerShell como administrador):
@@ -257,7 +252,7 @@ chmod +x "$ENTREGA/conectar-ssh.sh"
 chown -R kali:kali "$ENTREGA" 2>/dev/null || true
 
 # ----------------------------------------------------------
-# 9. VERIFICACIONES
+# 10. VERIFICACIONES
 # ----------------------------------------------------------
 echo
 echo "=============================================="
@@ -269,7 +264,7 @@ echo "[SSH]"; systemctl is-active ssh
 echo "[SERVICIOS]"; systemctl is-active bind9; systemctl is-active apache2; systemctl is-active ssh
 
 # ----------------------------------------------------------
-# 10. CUADRO LISTO
+# 11. CUADRO LISTO Y LINK
 # ----------------------------------------------------------
 echo
 echo "=============================================="
@@ -278,12 +273,15 @@ echo "=============================================="
 echo "  Dominio : http://$DOMINIO"
 echo "  IP      : $IP"
 echo "  SSH     : ssh kali@$IP"
+echo "  Contraseña SSH: kali"
 echo "  Web     : $WEBROOT"
 echo "  Sitio   : $SITIO_HOME"
 echo "  LEEME   : $ENTREGA/LEEME-PROFESOR.txt"
-echo "  Respaldos: $RESPALDO"
+echo "=============================================="
+echo " ¡Abre este link en tu navegador!"
+echo " >> http://$DOMINIO << "
+echo " (o http://$IP si el DNS no está configurado)"
 echo "=============================================="
 echo "NO vuelvas a ejecutar el script mientras el"
-echo "profesor revisa: la IP puede cambiar y su DNS"
-echo "manual dejaría de servir."
+echo "profesor revisa: la IP puede cambiar."
 echo "=============================================="
